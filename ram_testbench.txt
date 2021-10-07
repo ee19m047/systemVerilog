@@ -1,0 +1,253 @@
+// Code your testbench here
+// or browse Examples
+// Code your design here
+module ram(clk,rst,wr,din,addr,dout);
+  input clk,rst,wr;
+  input [7:0] din;
+  input [7:0] addr;
+  output reg [7:0] dout;
+  
+  reg [7:0] mem[256];
+  integer i;
+  
+  always@(posedge clk) begin
+    if (rst == 1'b1) begin
+      for(i=0;i<256;i++) begin
+        mem[i] <= 0;
+      end
+    end
+    else begin
+      if(wr == 1'b1)
+        mem[addr] <= din;
+      else
+        dout <= mem[addr];
+    end
+  end
+endmodule
+
+
+
+// Code your testbench here
+// or browse Examples
+class transaction;
+  rand bit [7:0] din;
+  randc bit [7:0] addr;
+  bit [7:0] dout;
+  bit wr;
+  
+  constraint addr_c {addr>10; addr<18;}
+endclass
+
+class generator;
+  
+  transaction t;
+  mailbox mbx;
+  event done;
+  integer i;
+  
+  function new(mailbox mbx);
+    this.mbx = mbx;
+  endfunction
+  
+  task run();
+    t = new();
+    
+    for(i=0;i<100;i++) begin
+      t.randomize();
+      mbx.put(t);
+      $display("[GEN]: Data send to the Driver");
+      @(done);
+      #10;
+    end
+  endtask
+endclass
+
+interface ram_intf();
+  logic clk;
+  logic rst;
+  logic wr;
+  logic [7:0] din;
+  logic [7:0] addr;
+  logic [7:0] dout;
+endinterface
+
+
+class driver;
+  
+  transaction t;
+  mailbox mbx;
+  event done;
+  
+  virtual ram_intf vif;
+  
+  function new(mailbox mbx);
+    this.mbx = mbx;
+  endfunction
+  
+  task run();
+    t = new();
+    forever begin
+      mbx.get(t);
+      vif.din = t.din;
+      vif.addr = t.addr;
+      $display("[DRV]: Data triggered with Interface");
+      ->done;
+      @(posedge vif.clk);
+    end
+  endtask
+endclass
+
+class monitor;
+  
+  transaction t;
+  mailbox mbx;
+  
+  virtual ram_intf vif;
+  
+  function new(mailbox mbx);
+    this.mbx = mbx;
+  endfunction
+  
+  task run();
+    t = new();
+    forever begin
+      t.din = vif.din;
+      t.addr = vif.addr;
+      t.wr = vif.wr;
+      t.dout = vif.dout;
+      mbx.put(t);
+      $display("[MON]: Data send to Scoreboard");
+      @(posedge vif.clk);
+    end
+  endtask
+endclass
+
+class scoreboard;
+  
+  transaction t;
+  mailbox mbx;
+  transaction tarr[256];
+  
+  function new(mailbox mbx);
+    this.mbx = mbx;
+  endfunction
+  
+  task run();
+    forever begin
+      mbx.get(t);
+      
+      if(t.wr == 1) begin
+        if(tarr[t.addr] == null) begin
+          tarr[t.addr] = new();
+          tarr[t.addr] = t;
+          $display("[SCO]: Data write test Passed");
+          $display("addr: %d, data: %d", t.addr,t.din);
+        end
+      end
+      else begin
+        if (tarr[t.addr] == null) begin
+          if(t.dout == 0) 
+            $display("[SCO]: Data read test Passed");
+         
+          else begin
+            $display("[SCO]: Data read test Failed");
+          end
+        end
+        else begin
+          if(t.dout == tarr[t.addr].din) 
+            $display("[SCO]: Data read test Passed");
+         
+          else begin
+            $display("[SCO]: Data read test Failed");
+          end
+          
+        end
+      end
+      end
+   endtask
+endclass
+      
+class environment;
+  
+  generator gen;
+  driver drv;
+  monitor mon;
+  scoreboard sco;
+  
+  mailbox gdmbx,msmbx;
+  
+  virtual ram_intf vif;
+  
+  event gddone;
+  
+  function new(mailbox gdmbx, mailbox msmbx);
+    this.gdmbx = gdmbx;
+    this.msmbx = msmbx;
+    
+    gen = new(gdmbx);
+    drv = new(gdmbx);
+    
+    mon = new(msmbx);
+    sco = new(msmbx);
+    
+  endfunction
+  
+  task run();
+    
+    drv.vif = vif;
+    mon.vif = vif;
+    
+    gen.done = gddone;
+    drv.done = gddone;
+    
+    fork
+      gen.run();
+      drv.run();
+      mon.run();
+      sco.run();
+    join_any
+  endtask
+endclass
+      
+module tb;
+  
+  environment env;
+  
+  mailbox gdmbx;
+  mailbox msmbx;
+  
+  ram_intf vif();
+  
+  ram dut(vif.clk,vif.rst,vif.wr,vif.din,vif.addr,vif.dout);
+  
+  initial begin
+    gdmbx = new();
+    msmbx = new();
+    
+    env = new(gdmbx,msmbx);
+    
+    env.vif = vif;
+    #50;
+    env.run();
+    #1000;
+    $finish;
+  end
+  
+  initial begin
+    $dumpvars;
+    $dumpfile("dump.vcd");
+  end
+ 
+  always #5 vif.clk = ~vif.clk;
+  
+  initial begin
+    vif.clk = 0;
+    vif.rst = 1;
+    #50;
+    vif.wr = 1;
+    vif.rst = 0;
+    #300;
+    vif.wr = 0;
+    #200;
+  end
+endmodule 
